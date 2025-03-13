@@ -1,342 +1,97 @@
 # Kevlar: Durable Sequestered Encryption Defenses for Memory Vulnerabilities
 
-Kevlar is a C++-based encrypted data-type extension that provides durable "sequestered encryption " defenses against a wide range of memory vulnerabilities. Kevlar requires an x86 processor with SSE vector extensions and use of the GCC compiler.
+*Cryptography is the only superpower in computer security.*
 
-The current release of Kevlar is a technology demonstration, which shows the capabilities of sequestered encryption with implementation limitation details in this README.
+This is the mantra of Kevlar and the approach it uses to protect sensitive C++ variables from memory vulnerabilities. Kevlar is a C++ extension that provides programmer with encrypted data types that work exactly like built-in data types, but they are protected from memory attacks with strong encryption. To protect these variables, Kevlar wraps sensitive data with randomized, authenticated, and sequestered encryption. Once wrapped with  encryption, sensitive C++ variables are protected against memory attacks ***despite*** the vulnerabilities in the memory system, caches, store buffers, DRAM, etc.
 
-## Introduction to Kevlar Memory Security Defenses
+Let's dive into the defensive features of Kevlar:
 
-Memory vulnerabilities are weaknesses in how software manages memory, allowing attackers to read or write unintended portions of memory. These flaws—like buffer over-reads, Rowhammer, and cold-boot attacks—can lead to crashes, data leaks, or full system takeovers. Exploits like Heartbleed, Spectre, and classic buffer over-reads have proven how devastating these attacks can be, compromising everything from personal devices to critical infrastructure.
+* **Randomized encryption** - When Kevlar encrypts a data value, it first packs it with true random salt, such that the resulting ciphertext never correlates with the value being encrypted. For example, assign "42" to an encrypted variable 1M times and you will produce 1M different ciphertexts. This feature prevents cryptanalysis attacks on program ciphertext (.e.g, CIPHERLEAKs), in the event it is disclosed or leaked by memory system vulnerabilities.
+* **Authenticated encryption** - When Kevlar decrypts a data value, it can tell if the value decrypted was valid ciphertext. As such, it is not possible for an attacker to forge ciphertext values without being detected. In addition, attacks that perturb memory system integrity such as Rowhammer attacks that can flip bits in DRAM, will be detected when the encrypted variable is next used in the program. Moreover, Kevlar will attempt to correct bit-errors in the invalid ciphertext, and if it is able to correct the error, it will continue the program with the correct ciphertext.
+* **Sequestered encryption** - Kevlar performs its cryptography with an AES-128 implementation with its keys and plaintext sequestered to the CPUs register file (i.e., XMM vector registers). When a program performs an operation on a Kevlar encrypted variable, the ciphertext is loaded into a register, decrypted with an in-register key (and keytable), computed upon in plaintext form, and then encrypted and returned to memory as ciphertext. Using sequestered encryption, plaintext and key data only exists in registers. Thus, if the memory attack cannot read the register (e.g., cold-boot, Spectre, Rowhammer), it cannot see anything about the Kevlar-protected data except its ciphertext.
+* **Leaky program behavior detection** - While Kevlar uses strong encryption to prevent direct disclosures of protected variable, program behaviors, such as branch behavior and memory access, can indirectly reveal information about sensitive .  These side channels, as they are called, must be eliminated by eliminiting dangerous leaky program behaviors. To assist programmers in writing more secure software, Kevlar-protected variable support (a limited form of )self-reflection, a mechanism that allows them to detect when they are used in a dangerous manner. When leaky behaviors are detected, a Kevlar-protected variable will issue to one-time warning, which will allow the program to debug and excise the dangerous behavior.
 
-Defending against memory vulnerabilities is crucial because they are a prime target for hackers, enabling remote code execution, privilege escalation, and data theft. Kevlar uses advanced cryptography to defend against a wide range of memory vulnerabilities, using a technology called **sequestered encryption**.  Sequestered encryption ensures that all sensitive data in memory is **always** encryption is a strong cipher. The approach used by sequestered encryption ensures that no decrypted data (plaintext) or keys are ever stored in memory, so attackers can fish around in your memory system as they desire, and they will **never** be able to see or manipulate your sensitive data. Where many protections (e.g., Intel SGX or AMD SEV) provide encryption protection in the DRAM of the memory, Kevlar provides encryption defenses **everywhere** in the memory system, including the DRAM, swap space, all levels of the cache hierarchy, store buffers, DRAM row buffers, victim caches, etc.
+The current release of Kevlar is a technology demonstration, which shows the capabilities of sequestered encryption with implementation limitation details in this README.  Kevlar requires an x86 processor with SSE vector extensions and use of the GCC compiler.
 
-Kevlar defenses are deployed by programmers selectively on program variables and data structures that contain sensitive data. Other data, that is not sensitive, need not be protected with Kevlar. This allows Kevlar to deploy strong cryptographic defenses while keeping overheads low. To deploy Kevlar sequestered encryption defenses, a programmer need only declare their variable to be a Kevlar encrypted variable (e.g., replace a uint64_t variable with an enc_uint64_t variable).
+## Examples of Attacks Stopped by Kevlar
 
-## How does Kevlar's Sequestered Encryption Work?
+Kevlar protects variables against a wide range of memory vulnerabilities, in particular those that attempt to disclose memory variables or impact memory integrity. Kevlar is a ***highly durable defense against***:
 
-Kevlar protects variables against a wide range of memory vulnerabilities, in particular those that attempt to disclose memory variables or impact memory integrity. Instead of attempting to fix the vulnerabilities in memory, caches, store buffers, row buffers, and all the other various locations in memory, Kevlar protects data directly with strong cryptography. When a variable or data structure is protected with Kevlar, the 
+* **Spectre/Meltdown** - These attacks leak memory values through mispeculation priming and microarchitecture side channels. Kevlar is a strong durable defense against all know variants (e.g., V1, V2, Foreshadow, Fallout, ZombieLoad, etc.). Any existing attack will only leak pure random ciphertext.
+* **Rowhammer** - Kevlar will detect all known variants of Rowhammer attacks, through the use of authenticated encryption. After any Rowhammer attack, the next read of a Kevlar-protected variable will signal a decryption authentication error. When a decryption authentication fails, Kevlar will attempt to repair the corrupted ciphertext. If the number of bit-corruptions is small, Kevlar will be able to correct the ciphertext and complete the operation; otherwise, the Rowhammer attack is detected and the program is terminated. If Rowhammer reads are attempted (e.g., RAMBleed), the attacker will only see ciphertext.
+* **Cold-boot Attacks** - If the DRAM is super-cooled and transferred to a less secure system, Kevlar defenses will ensure that no sensitive variables in memory can be decrypted. Because Kevlar uses sequestered encryption, the key information needed to decrypt stolen memory remains in the original system.
+* **Buffer Over-reads** - When a buffer over-read occurs (e.g., HeartBleed), Kevlar will ensure that only ciphertext is revealed to the attacker, since all Kevlar-protected data in memory is always encrypted. Moreover, the use of sequestered encryption ensures that if the attacker continues to scan memory, they will no find the keys necessary to decrypt any protected ciphertext (since it remain always in CPU registers).
+* **Ciphertext analysis attacks** - If an attacker attempts to reverse-engineer ciphertext in memory (e.g. , CIPHERLEAKS), the attacker will not find any information contained in the produced ciphertect. Kevlar injects random entropy into every ciphertext it creates, ensuring that any ciphertext it produces appears as a true random value. In addition, each ciphertext contains an authentication code, and thus, chosen-plaintext attacks (CPA) will not be possible without Kevlar detecting the attack.
+* **Software and hardware side channels** - If an attacker attempts to infer information about a system secret by observing publicly visible aspects of the system (e.g., PRIME+PROBE, PortSmash), the leaky program behavior detectors that Kevlar-protected variables provide will assist programmer in excising the leaky behaviors that their programs possess. Once this process is complete, the program will no longer exhibit behaviors that belie its underlying secrets.
 
-## Kevlar Defends Against Memory Disclosures
-Kevlar protects variables against a wide range of memory vulnerabilities, in particular those that attempt to disclose memory variables or impact memory integrity.
+## Running the Kevlar Technology Demonstration
 
-Kevlar is a ***highly durable defense against***:
+The Kevlar technology demonstration includes an implementation of the "enc_uint64_t" encrypted 64-bit unsigned integer type for C++. Any program variable that declares its variable with this type will receive Kevlar protections. To run Kevlar, you will have to meet some specific system requirements:
 
-* **Spectre/Meltdown** - These attacks leak memory values through mispeculation priming and microarchitecture side channels. Kevlar is a strong durable defense against all know variants (e.g., V1, V2, Foreshadow, Fallout, ZombieLoad, etc.) Any existing attack will only leak pure random ciphertext.
-* **Rowhammer** - Kevlar will detect all known variants of Rowhammer attacks, through the use of authenticated encryption. Once an data integrity attack occurs, the next read of the protected variable will signal an authentication error. In addition, when an authentication fails, Kevlar is able to repair 1 or 2 bit attacks on the corrupted variable, and detect any number of additional bit flips due to a Rowhammer attack.
-* **Cold-boot Attacks** - If the DRAM is super-cooled and removed from the system and placed in a less secure system, Kevlar defenses will ensure that no sensitive variables are decrypted in memory. In addition, no key data or plaintext will be stored in memory.
-* **Buffer Over-reads** - When a buffer over-read occurs (e.g., HeartBleed), Kevlar will ensure that only ciphertext is revealed to the attack, since all protected data only exists in the memory system as ciphertext.
-* **RAMBleed** - Rowhammer reads will only see ciphertext values in memory.
-* **Ciphertext analysis attacks** - If an attacker attempts to analyze protected ciphertext (e.g. , CIPHERLEAKS), the will have great difficulty extracting any information from the ciphertext. Kevlar injects 32-bits of entropy into every ciphertext, making any generated ciphertext essentially a random value. In addition, each ciphertext contains a 32-bit authentication code, thus chosen-plaintext attacks (CPA) will not be possible without Kevlar detecting the attack.
-* **Future Memory Vulnerability *X*** - If the future attack *X* reads memory and does not have the ability to read register values, then Kevlar will be a strong defense against attack *X*.
+* GNU G++ on Linux, with G++ at least version 11.4 (earlier versions may work but they have not yet been tested).
+* An x86 CPU with support for the SSE2 vector instruction set extension. This should include any Intel or AM processor sold in the last decade.
 
-## Kevlar Defends Against Memory Side Channels
+To run the technology demo, check out the Kevlar git repo from: https://github.com/toddmaustin/kevlar, and then run the following command line:
 
-Kevlar can also act as an ***effective defense against program side channels***. Kevlar variables support a limited degree of reflection, which allow Kevlar to warn the programmer if they use a protected variable in a potentially dangerous manner. There are two primary dangerous uses of protected variables: *i)* use of a protected variable in an if-statement, creating program control flow that reveals information about the protected variable, and *ii)* use of a protected variable to index an array variable, revealing sensitive data in the addresses created. Kevlar variable reflection will detect both of these cases.
+```
+make clean build test
+```
 
-## Running the Kevlar Technology Demo
+This command will first "clean" the Kevlar directory and then "build" the demonstration application, and "test" it by running a battery of tests. If the demonstration application functions correctly, the output will look as follows:
 
-The current release of Kevlar is a technology demonstration, which shows the capabilities of sequestered encryption with implementation limitation details in this README.
+```
+Testing type: uint64_t
+Testing 'x'...
+WARNING: Program behaviors are likely leaking secrets!
+'x' is non-zero...
+     a: 7f5d23d0380bccfdb671cab1901097fd
+aprime: 47e0dbc8be1a4d46452bf7520615f4d1
+     b: d7ed9073239b8e9e710482e4bd5aa0c6
+     c: 1e071d460d6b0168b26520a5dc005952
+     d: e5146cdd7cbbcd178030892fbebabf97
+     e: f1acb6f65cc6133a2b4070c55b0318e5
+     f: 0a68ee694200dba1ceca7c80d33be93a
+     g: 9bb79db5cbbbf6b7894651c209ffcfad
+     h: c56e1c6a798ffc24614a60e901aeaee7
+     i: d4a4eb2fe0ae84e60bb94190b35ea882
+HACK: Flipping bit 8 of protected variable `j'
+ERROR: Decryption authentication failure!
+NOTE: Attempting recovery of corrupted ciphertext...
+NOTE: Ciphertext was fixed! (Flipped bit `8')
+     j: 0d9b2be88b36b90b59612ee4bab96c37
+All tests passed for uint64_t.
+INFO: Resetting leaky behavior detectors.
+INFO: Running data-heuristic ISQRT() algorithm...
+WARNING: Program behaviors are likely leaking secrets!
+INFO: The integer square root of '975461057789971041' is '987654321',
+INFO: Resetting leaky behavior detectors.
+INFO: Running data-oblivious ISQRT() algorithm...
+INFO: The integer square root of '975461057789971041' is '987654321',
+```
 
-## What use is the Kevlar Technology Demo?
+The technology demonstration application does the following: 1) run a sequence of encrypted computation, checking the results of the computation. 2) Flips a bit in the ciphertext of one of the later computation, and then corrects the bit-flip. 3) runs an ISQRT function that implement Newton's Algorithm, first with data heuristics that set off the leaky detectors, and again, with a data-oblivious implementation that does not set of the leakage detectors.
 
-The current release of Kevlar is a technology demonstration, which shows the capabilities of sequestered encryption with implementation limitation details in this README.
+If you do not see the output above, then there is probably some aspect of your compiler, operating systems, or CPU that is impeding Kevlar's correct operation. If this happens, please don't hesitate to submit an issue on GitHub, and we will try to fix the problem. Good luck!
+
+## Using Kevlar to Protect Your Own Programs
+
+TBD...
 
 ## What are the Current Limitations of Kevlar?
 
-The current release of Kevlar is a technology demonstration, which shows the capabilities of sequestered encryption with implementation limitation details in this README.
+TBD...
 
+## To Learn More about Kevlar and Sequestered Encryption...
 
+Kevlar was built to demonstrate the strong defenses given to software by sequestered encryption. Yet, in its current form, Kevlar is only a small demonstration of the full capabilities of sequestered encryption.
 
+To learn more about sequestered encryption, read this paper: ["Sequestered Encryption: A Hardware Technique for Comprehensive Data Privacy"](https://drive.google.com/file/d/1d7YQEsHqLNkNqSXXbTNtEFzDhbQRt155/view?usp=drive_link)
 
+Or, check out this short presentation: ["Sequestered Encryption Primer"](https://drive.google.com/file/d/160teigtxkxjOqAOvT4ttlj-_WoQmb_BI/view?usp=drive_link)
 
-At the first use of a potentially dangerous use of a protected variable, the program will output this warning message:
-
-```
-make TARGET=<target> clean build test
-```
-
-This command will first "clean" the benchmark directory and then "build" the application, and "test" that it is running correctly. The \<target> indicates the specific target that the application should be built for. Currently, Bringup-Bench support the following targets: 
-
-* Program side channels
-
-## Running the Kevlar Test Program
-
-Kevlar protects variables against a wide range of memory vulnerabilities, in particular those that attempt to disclose memory variables or impact memory integrity.
-
-## Kevlar System Requirements
-
-Kevlar protects variables against a wide range of memory vulnerabilities, in particular those that attempt to disclose memory variables or impact memory integrity.
-
-To build and test a benchmark, simply enter one of the benchmark directories and execute the following makefile command:
-
-```
-make TARGET=<target> clean build test
-```
-This command will first "clean" the benchmark directory and then "build" the application, and "test" that it is running correctly. The \<target> indicates the specific target that the application should be built for. Currently, Bringup-Bench support the following targets: 
-
-- **Linux host target - TARGET=host** - This target builds the benchmarks to run as a Linux application.
-
-- **Standalone target - TARGET=standalone** - This target builds the benchmarks to run as a memory-only standalone application. For this target, all benchmark output is spooled to a pre-defined memory buffer, and the libmin\_success() and libmin\_fail() intefaces result in the application spinning at a specific code address. This mode is designed for bringing up CPUs and accelerators that do not yet have any OS or device I/O support. See common/libtarg.c for the internal intefaces used to spool program output to internal buffers. This particular target is useful in bringing up CPUs when they still have no I/O support, simply spool benchmark output to DRAM, and dump the DRAM after the benchmark completes.
-
-- **Simple_System target - TARGET=simple** - This target build the benchmarks to run in the RISC-V Simple_System simulation environment. Simple_system allows hardware developers to do SystemVerilog development on Verilator, with fast SystemVerilog simulation using the Simple_System target. The Simple_System target supports a character output device, plus a simple memory system. By default, this is an integer computation only mode, so any FP in the benchmarks will be emulated with GCC's soft-float support. To learn more about the RISC-V Simple_System, go here: https://github.com/lowRISC/ibex/blob/master/examples/simple_system/README.md. The current version of the Simple_System target was tested with: 1) Ibex "small" core, 2) Simple_System default devices and memory configuration.
-
-- **RISC-V Spike target = TARGET=spike** - This target is identical to the "simple" target, as it build RISC-V binaries to be run on the Spike instruction set simulator (ISS). Spike is configured to support the Simple_system RISC-V I/O devices. This target is useful as a "golden" model to compare against execution traces occurring on a (perhaps buggy) RTL design target. Before first running a simulation, do a "make spike-build" in the top-level bringup-bench directory to make the Spike device DLL.
-
-- **HashAlone Host target - TARGET=hashalone-host** - This target builds the benchmarks to run on x86/Linux with a hashing output device. Instead of producing output, hash-alone binaries simply send the program output to a hash function. When the program completes it prints the final value of the hash function, which is cryptographically unique for every possible output of the program.
-
-- **HashAlone Spike target - TARGET=hashalone-spike** - This target builds the benchmarks to run on bare-metal RISC-V with a hashing output device. Instead of producing output, hash-alone binaries simply send the program output to a hash function. When the program completes it prints the final value of the hash function, which is cryptographically unique for every possible output of the program. Use this target to enhance your "golden model" to support reference hash-alone signatures for the bringup-bench benchmarks.
-
-Each benchmark support three standard Makefile targets: build, test, and clean
-
-- **build** - Builds the benchmark
-
-- **test** - Runs the benchmark and validates its output.
-
-- **clean** - Deleted all derived files.
-
-For example, to build, test and then clean the Bubble Sort benchmark in encrypted mode:
-```
-make TARGET=host build
-make TARGET=host test
-make TARGET=host clean
-```
-
-To assist in running experiments, the top-level Makefile includes a few useful targets:
-```
-make TARGET=<target> run-tests   # clean, build, and test all benchmarks in the specified target mode (host, standalone, simple)
-make all-clean   # clean all benchmark directories for all supported targets
-```
-You should be able to adapt these targets to your own project-specific tasks.
-
-## Benchmarks
-
-
-The Bringup-Bench benchmarks were selected for their minimal library and system dependencies, while still being interesting and non-trival codes.i Currently, the benchmark suite supports the following benchmarks. Note that the benchmarks tagged with (FP) require some form of floating point support, and the remaining benchmarks only require integer and string computation.
-
-- **ackermann** - Calculates the Ackermann function for a variety of input values.
-
-- **anagram** - Computes anagrams for the phrases in "input.txt" using the diction in the "words". This benchmark uses code-based read-only file access for multiple files.
-
-- **audio-codec** - Implements the A-Law compression algorithm for 16-bit PCM audio streams.
-
-- **avl-tree** - An AVL tree implmenetation with test code.
-
-- **banner** - Prints out a fancy vertical banner.
-
-- **blake2b** - Reference implementation and test of BLAKE2b, a cryptographic hash function based on Daniel J. Bernstein's ChaCha stream cipher.
-
-- **bloom-filter** - A Bloom filter implementation with test code that measures accuracy and false-positive rates.
-
-- **boyer-moore-search** - Performs a Boyer-Moore optimized search, given a test string and a large string to search.
-
-- **bubble-sort** - Performs a bubble sort on a randomly generated internal list of integers.
-
-- **checkers** - Checkers game based on minimax search.
-
-- **c-interp** - A C language interpreter that interprets the test program "hello.c". This benchmark uses code-based read-only file access.
-
-- **cipher** - A TEA cipher implementation the encrypts and decrypts some fixed test data.
-
-- **dhrystone** - An old-school Dhrystone benchmark.
-
-- **distinctness** - Computes if every element of an array is unique.
-
-- **donut** - A donut in code and action that defies proper explanation!
-
-- **fft-int** - Performs an integer fast-Fourier-transform on fixed integer input data.
-
-- **flood-fill** - Performs a color-based flood fill of a fixed tw-dimensional text array.
-
-- **frac-calc** - Computes calculations on proper and improper fractions.
-
-- **fuzzy-match** - Performs fuzzy matching of strings (e.g., slightly misspelled strings will match), with test code.
-
-- **fy-shuffle** - A Fisher-Yates perfect random vector shuffle implementation.
-
-- **gcd-list** - Computes the greatest common divisor for a list of integers using the division algorithm.
-
-- **grad-descent** - Gradient descent with linear regression implementation, with test code.
-
-- **graph-tests** - A graph data-structure manipulation library with many tests.
-
-- **hanoi** - Solves the Tower's of Hanoi problem for a variable number of towers.
-
-- **heapsort** - Performs a heap sort on a randomly generated data set
-
-- **indirect-test** - A few specialized tests to validate indirect jumps, switch tables, and function returns.
-
-- **kadane** - Implementation of Kadane's algorithm, which finds find the maximum sum of a contiguous subarray.
-
-- **kepler** - Calculates an orbital path for a planetary body based on the Kepler parameters.
-
-- **k-means** - A K-Means clustering algorithm running on synthetic data.
-
-- **knapsack** - A knapsack packing algorithm running various tests.
-
-- **knights-tour** - A dynamic programming implementation of the Knight's Tour problem (i.e., one chess knight visits all board squares).
-
-- **life** - Conway's game of life simulation.
-
-- **longdiv** - Computes a long division using the pencil-on-paper method.
-
-- **lz-compress** - A compression/decompress tool based on the LZ compression algorithm.
-
-- **mandelbrot** - Calculate and print using ASCII graphics a Mendelbrot fractal.
-
-- **max-subseq** - Computes the longest subsequence common (LSC) to all sequences in a set of sequences using the dynamic programming method.
-
-- **mersenne** - Generate a sequence of pseudo-random numbers using the Mersenne Twister algorithm.
-
-- **minspan** - Finds the minimal spanning tree of a graph (via Kruscal's algorithm over the graph's adjacency matrix).
-
-- **natlog** - Compute the value of natural log e, using an iterative method.
-
-- **nr-solver** - Computes a square-root value using a Newton-Raphson solver.
-
-- **parrondo** - A game theory based solver that simulates Parrondo's paradox.
-
-- **pascal** - Compute Pascal's triangle, to a specified depth.
-
-- **pi-calc** - An integer based high-precision PI calculator.
-
-- **primal-test** - Performs the Miller-Rabin stochastic primarility test to extremely high certainty.
-
-- **quine** - A C program that prints itself.
-
-- **rabinkarp-search** - Implements the very efficient Rabin-Karp data-oblivious string search algorithm. This search algorithm is O(N) in the length of the string searched.
-
-- **regex-parser** - A regular-expression parser running a battery of tests.
-
-- **rho-factor** - A Pollard's Rho integer factorization algorithm.
-
-- **rle-compress** - A run-length-encoding (RLE) compressor, with multiple tests.
-
-- **shortest-path** - Solves the all-pairs shortest path problem using the Floyd-Warshall algorithm.
-
-- **sieve** - Computes the prime values within a specified range, using the Sieve of Eratosthenes algorithmm
-
-- **simple-grep** - A simplified implementation of the Unix grep command.
-
-- **skeleton** - A minimal program, for use a starting point for new application ports and developments.
-
-- **spelt2num** - A spelled-out number to binary number converter.
-
-- **spirograph** - A spirograph simulation that produces a sequence of resulting data points.
-
-- **strange** - A strange C program that acts strangely in an expected manner.
-
-- **tiny-NN** - A deep neural net (DNN) implementation, with training and inference tests.
-
-- **topo-sort** - Tolologically sorts a graph and prints the result in breadth-first order.
-
-- **totient** - Calculates the Euler totient function phi.
-
-- **vectors-3d** - A 3D vector library running a battery of tests.
-
-- **weekday** - Given a year, month, and day, deterime the day of the week for the specified date.
-
-## Minimal library dependencies
-
-Bringup-Bench has no library dependencies, to reduce the amount of system infrastructure needed to get your first application running. Instead of needing system libraries, Bringup-bench implements its own library in "libmin". "libmin" includes most of what simple applications need, including:
-
-- printing values
-- parsing numbers from text
-- options parsing
-- string processing
-- memory copy and setting
-- program exit interfaces
-- pseudo-random number generation
-- dynamic storage allocator
-- code-based read-only file access functions
-- sorting functions
-- character class tests (from ctype.h)
-- floating-point math functions
-
-See the file "common/libmin.h" for more details.
-
-## Minimal system dependencies
-
-To minimize the system OS requirements, the Bringup-Bench only requires four system call interfaces to be implement. The interfaced required are as follows:
-```
-/* benchmark completed successfully */
-void libtarg_success(void);
-
-/* benchmark completed with error CODE */
-void libtarg_fail(int code);
-
-/* output a single character, to wherever the target wants to send it... */
-void libtarg_putc(char c);
-
-/* get some memory */
-void *libtarg_sbrk(size_t inc);
-```
-Once these four interfaces are implemented, all of the Bringup-Bench benchmarks can be built and run. To facilitate testing, the "TARGET=host" target defines the four required system interfaces by passing them on to the Linux OS. In addition, the repo also provides a standalone target "TARGET=sa" which only requires that the target support provbable memory.
-
-## Using the code-based read-only file system
-
-Using the code-based read-only file system, it is possible for a benchmark to access a read-only file that is incorporated into its code. To convert an input file to a read-only code-based file, use the following command (shown for the benchmark "anagram"):
-```
-python3 scriptsr/file2hex.py words words.h __words
-```
-Where "words" is the file to convert, "words.h" is the name of the output header file with the data, and "__words" is the name of the variable defined in the header file "words.h". The resulting file produces two values: __words_sz is the size of the data in the __words array. To access the file, include into a MFILE definition in the benchmark file, for example:
-```
-MFILE __mwords = {
-  "words",
-  __words_sz,
-  __words,
-  0
-};
-MFILE *mwords = &__mwords;
-```
-Now the code-based read-only memory file "mwords" is now available for opening, reading, and closing. The following interfaces are available to access memory files:
-```
-/* open an in-memory file */
-void libmin_mopen(MFILE *mfile, const char *mode);
-
-/* return in-memory file size */
-size_t libmin_msize(MFILE *mfile);
-
-/* at end of file */
-int libmin_meof(MFILE *mfile);
-
-/* close the in-memory file */
-void libmin_mclose(MFILE *mfile);
-
-/* read a buffer from the in-memory file */
-size_t libmin_mread(void *ptr, size_t size, MFILE *mfile);
-
-/* get a string from the in-memory file */
-char *libmin_mgets(char *s, size_t size, MFILE *mfile);
-
-/* read a character from the in-memory file */
-int libmin_mgetc(MFILE *mfile);
-```
-
-## Hash-Alone execution
-
-Hash-alone execution targets (e.g., hashalone-host, hashalone-spike) allow pure bare-metal benchmark execution. As such, benchmarks configured for the hash-alone targets can execution completely and verify their results with NO output or input devices. To run the benchmark, simply load its binary and jump to the start address specified in the ELF binary. When the libmin_success() interface is called, simply spin to terminate the program. At completion, the memory variable "__hashval" contains a hash signature of the output of the program as it run, since in this target mode all libtarg_putc() output goes to a FNV1a hash function. The final hash value will indicate the full output of the program. To verify the hash function, use one of the reference hash-alone targets (e.g., hashalone-host, hashalone-spike). For RISC-V targets, to debug a hash-alone output hash signature mismatch, simply use the hashalone-spike target as your golden model -- this target will run the RISC-V binaries deterministically and with the same addresses each time, so it is possible to perform a cycle-by-cycle comparisons against your design-under-test.
-
-## Porting the Bringup-Bench to other targets
-
-To port the Bringup-bench to your new CPU, accelerator, compiler, or operating system, you need only concern yourself with the "libtarg.h" and "libmin.c" files. First define a new target specifier in "Makefile" and then add it to the "libtarg.h" and "libtarg.c" files. Inside the "libtarg.h" file you will need to define basic data type sizes plus define how the benchmarks access "vararg" parameter arguments. Inside the "libtarg.c" file, you will need to define the following four system call interfaces:
-```
-/* benchmark completed successfully */
-void libtarg_success(void);
-
-/* benchmark completed with error CODE */
-void libtarg_fail(int code);
-
-/* output a single character, to wherever the target wants to send it... */
-void libtarg_putc(char c);
-
-/* get some memory */
-void *libtarg_sbrk(size_t inc);
-```
+Or, visit Agita Labs (http://agitalabs.com), which is a startup the has deployed a hardware version of sequestered encryption in the Microsoft Azure and Amazon AWS clouds. Their version of sequestered encryption is much more powerful, providing a full privacy-oriented programming environment that allows cloud developers to compute on third-party data without the ability to see that data. Check out the website for more information.
 
 ## Licensing details
 
-The portions of the benchmark suite that was built by the benchmark team are (C) 2021-2024 and available for use under
-the [Apache License, version 2.0](https://www.apache.org/licenses/LICENSE-2.0) 
-
-And, thanks to the respective authors of the benchmarks that were adapted for the Bringup-Bench Benchmark Suite from other efforts.
+The Kevlar technology demonstration code was written by Todd Austin, and it is available for use under the [BSD license](https://en.wikipedia.org/wiki/BSD_licenses).
 
